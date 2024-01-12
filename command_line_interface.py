@@ -17,20 +17,22 @@
 
 # Note: The original script by Aaron Li was taken from
 # https://github.com/yl4579/StyleTTS2/blob/9b3dd4b910178088b1496a2f97d099f51c1058bb/Demo/Inference_LJSpeech.ipynb and
-# refactored by HydrusBeta.
+# modified by HydrusBeta.
 
+import argparse
+from collections import OrderedDict
+
+import models
+import numpy as np
+import phonemizer
+import soundfile
 import torch
 import yaml
+from Modules.diffusion.sampler import DiffusionSampler, ADPM2Sampler, KarrasSchedule
+from Utils.PLBERT.util import load_plbert
 from munch import Munch
 from nltk.tokenize import word_tokenize
-import models
 from text_utils import TextCleaner
-import soundfile
-import phonemizer
-from Utils.PLBERT.util import load_plbert
-from collections import OrderedDict
-from Modules.diffusion.sampler import DiffusionSampler, ADPM2Sampler, KarrasSchedule
-import argparse
 
 # Constants
 OUTPUT_SAMPLERATE = 24000
@@ -43,10 +45,11 @@ parser = argparse.ArgumentParser(prog='StyleTTS2',
 parser.add_argument('-t', '--text',            type=str,                       required=True)
 parser.add_argument('-w', '--weights_path',    type=str,                       required=True)
 parser.add_argument('-n', '--noise',           type=float, default=0.3)
-parser.add_argument('-s', '--style_blend',     type=float, default=0.0)
+parser.add_argument('-s', '--style_blend',     type=float, default=0.5)
 parser.add_argument('-d', '--diffusion_steps', type=int,   default=10)
 parser.add_argument('-e', '--embedding_scale', type=float, default=1.0)
 parser.add_argument('-o', '--output_filepath', type=str,                       required=True)
+parser.add_argument('-l', '--use_long_form',    action='store_true', default=False)
 args = parser.parse_args()
 
 # Load phonemizer
@@ -138,6 +141,7 @@ def lf_inference(text, s_previous, scaled_noise, alpha=0.7, diffusion_steps=5, e
         duration = model.predictor.duration_proj(x)
         duration = torch.sigmoid(duration).sum(axis=-1)
         pred_dur = torch.round(duration.squeeze()).clamp(min=1)
+        pred_dur[-1] += 5
         pred_aln_trg = torch.zeros(input_lengths, int(pred_dur.sum().data))
         c_frame = 0
         for i in range(pred_aln_trg.size(0)):
@@ -151,10 +155,22 @@ def lf_inference(text, s_previous, scaled_noise, alpha=0.7, diffusion_steps=5, e
     return out.squeeze().cpu().numpy(), s_pred
 
 # Perform inference
-s_prev = None
-noise = args.noise * torch.randn(1,1,256).to(DEVICE)
-audio_output, s_prev = lf_inference(args.text, s_prev, noise, alpha=args.style_blend,
-                                    diffusion_steps=args.diffusion_steps, embedding_scale=args.embedding_scale)
+noise = args.noise * torch.randn(1, 1, 256).to(DEVICE)
+
+if args.use_long_form:
+    sentences = args.text.split('.')
+    audio_outputs = []
+    s_prev = None
+    for sentence in sentences:
+        if sentence.strip() == "": continue
+        sentence += '.' # add it back
+        audio_output, s_prev = lf_inference(args.text, s_prev, noise, alpha=args.style_blend,
+                                            diffusion_steps=args.diffusion_steps, embedding_scale=args.embedding_scale)
+        audio_outputs.append(audio_output)
+    audio_output = np.concatenate(audio_outputs).ravel()
+else:
+    audio_output, s_prev = lf_inference(args.text, None, noise, alpha=None,
+                                        diffusion_steps=args.diffusion_steps, embedding_scale=args.embedding_scale)
 
 # Write the output file
 soundfile.write(args.output_filepath, audio_output, OUTPUT_SAMPLERATE, format='FLAC')
