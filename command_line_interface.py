@@ -83,7 +83,7 @@ def recursive_munch(d):
 model = models.build_model(recursive_munch(config['model_params']), text_aligner, pitch_extractor, plbert)
 _ = [model[key].eval() for key in model]
 _ = [model[key].to(DEVICE) for key in model]
-params_whole = torch.load(args.weights_path, map_location=DEVICE)
+params_whole = torch.load(args.weights_file, map_location=DEVICE)
 params = params_whole['net']
 for key in model:
     if key in params:
