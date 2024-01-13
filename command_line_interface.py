@@ -20,6 +20,7 @@
 # modified by HydrusBeta.
 
 import argparse
+import re
 from collections import OrderedDict
 
 import models
@@ -159,13 +160,13 @@ def lf_inference(text, s_previous, scaled_noise, alpha=0.7, diffusion_steps=5, e
 noise = args.noise * torch.randn(1, 1, 256).to(DEVICE)
 
 if args.use_long_form:
-    sentences = args.text.split('.')
+    sentences = re.split('[?!.]', args.text)
     audio_outputs = []
     s_prev = None
     for sentence in sentences:
         if sentence.strip() == "": continue
         sentence += '.' # add it back
-        audio_output, s_prev = lf_inference(args.text, s_prev, noise, alpha=args.style_blend,
+        audio_output, s_prev = lf_inference(sentence, s_prev, noise, alpha=args.style_blend,
                                             diffusion_steps=args.diffusion_steps, embedding_scale=args.embedding_scale)
         audio_outputs.append(audio_output)
     audio_output = np.concatenate(audio_outputs).ravel()
