@@ -43,7 +43,8 @@ parser = argparse.ArgumentParser(prog='StyleTTS2',
                                  description='A Text-to-speech framework that uses style diffusion and adversarial '
                                              'training with large speech language models')
 parser.add_argument('-t', '--text',            type=str,                       required=True)
-parser.add_argument('-w', '--weights_path',    type=str,                       required=True)
+parser.add_argument('-w', '--weights_file',    type=str,                       required=True)
+parser.add_argument('-c', '--config_file',     type=str,                       required=True)
 parser.add_argument('-n', '--noise',           type=float, default=0.3)
 parser.add_argument('-s', '--style_blend',     type=float, default=0.5)
 parser.add_argument('-d', '--diffusion_steps', type=int,   default=10)
@@ -54,9 +55,9 @@ args = parser.parse_args()
 
 # Load phonemizer
 global_phonemizer = phonemizer.backend.EspeakBackend(language='en-us', preserve_punctuation=True,  with_stress=True)
-config = yaml.safe_load(open("Models/LJSpeech/config.yml"))
 
 # Load pretrained ASR model
+config = yaml.safe_load(open(args.config_file))
 ASR_config = config.get('ASR_config', False)
 ASR_path = config.get('ASR_path', False)
 text_aligner = models.load_ASR_models(ASR_path, ASR_config)
