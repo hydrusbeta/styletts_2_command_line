@@ -20,20 +20,20 @@
 # modified by HydrusBeta.
 
 import argparse
-import re
 from collections import OrderedDict
 
+import gruut
+import librosa
 import models
 import nltk.data
 import numpy as np
-import phonemizer
 import soundfile
 import torch
-import yaml
-import librosa
 import torchaudio
+import yaml
 from Modules.diffusion.sampler import DiffusionSampler, ADPM2Sampler, KarrasSchedule
 from Utils.PLBERT.util import load_plbert
+from gruut.const import Word
 from munch import Munch
 from nltk.tokenize import word_tokenize
 from text_utils import TextCleaner
@@ -59,9 +59,6 @@ parser.add_argument('-i', '--reference_audio',   type=str,   default=None)
 parser.add_argument('-r', '--timbre_ref_blend',  type=float, default=0.3)
 parser.add_argument('-p', '--prosody_ref_blend', type=float, default=0.1)
 args = parser.parse_args()
-
-# Load phonemizer
-global_phonemizer = phonemizer.backend.EspeakBackend(language='en-us', preserve_punctuation=True,  with_stress=True)
 
 # Load pretrained ASR model
 config = yaml.safe_load(open(args.config_file))
@@ -119,6 +116,23 @@ def length_to_mask(lengths):
     return mask
 
 
+def convert_text_to_ipa(text: str):
+    sentences = gruut.sentences(text)
+    ipa_words = [convert_word_to_ipa(word) for sentence in sentences for word in sentence]
+    ipa_text = ' '.join(ipa_words)
+    return ipa_text
+
+
+def convert_word_to_ipa(word: Word):
+    if not word.is_spoken:  # e.g. punctuation marks
+        ipa_word = word.text
+    elif word.phonemes:
+        ipa_word = ''.join(word.phonemes)
+    else:
+        ipa_word = ''
+    return ipa_word
+
+
 # Build model
 model_params = recursive_munch(config['model_params'])
 model = models.build_model(model_params, text_aligner, pitch_extractor, plbert)
@@ -154,7 +168,7 @@ textcleaner = TextCleaner()
 def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, ref_s=None, alpha=0.25, beta=0.25, t=0.7):
     text = text.strip()
     text = text.replace('"', '')
-    ps = global_phonemizer.phonemize([text])
+    ps = [convert_text_to_ipa(text)]
     ps = word_tokenize(ps[0])
     ps = ' '.join(ps)
     tokens = textcleaner(ps)
