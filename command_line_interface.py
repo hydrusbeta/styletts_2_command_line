@@ -20,6 +20,7 @@
 # modified by HydrusBeta.
 
 import argparse
+import json
 from collections import OrderedDict
 
 import gruut
@@ -51,13 +52,15 @@ parser.add_argument('-w', '--weights_file',      type=str,                      
 parser.add_argument('-c', '--config_file',       type=str,                       required=True)
 parser.add_argument('-o', '--output_filepath',   type=str,                       required=True)
 parser.add_argument('-n', '--noise',             type=float, default=0.3)
-parser.add_argument('-s', '--style_blend',       type=float, default=0.5)
+parser.add_argument('-b', '--style_blend',       type=float, default=0.5)
 parser.add_argument('-d', '--diffusion_steps',   type=int,   default=10)
 parser.add_argument('-e', '--embedding_scale',   type=float, default=1.0)
 parser.add_argument('-l', '--use_long_form',     action='store_true', default=False)
-parser.add_argument('-i', '--reference_audio',   type=str,   default=None)
 parser.add_argument('-r', '--timbre_ref_blend',  type=float, default=0.3)
 parser.add_argument('-p', '--prosody_ref_blend', type=float, default=0.1)
+group = parser.add_mutually_exclusive_group()
+group.add_argument('-i', '--reference_audio',   type=str,   default=None)
+group.add_argument('-s', '--reference_style',   type=str,   default=None)
 args = parser.parse_args()
 
 # Load pretrained ASR model
@@ -222,9 +225,17 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
     return out.squeeze().cpu().numpy()[..., :-100], s_pred  # remove pulse artifact at end
 
 
+# get reference style
+if args.reference_audio:
+    s_ref = compute_style(args.reference_audio)
+elif args.reference_style:
+    with open(args.reference_style, 'r') as file:
+        s_ref = torch.FloatTensor([json.load(file)])
+else:
+    s_ref = None
+
 # Perform inference
 noise = args.noise * torch.randn(1, 1, 256).to(DEVICE)
-s_ref = compute_style(args.reference_audio) if args.reference_audio is not None else None
 
 if args.use_long_form:
     tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
