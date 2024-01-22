@@ -47,21 +47,32 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 parser = argparse.ArgumentParser(prog='StyleTTS2',
                                  description='A Text-to-speech framework that uses style diffusion and adversarial '
                                              'training with large speech language models')
-parser.add_argument('-t', '--text',              type=str,                       required=True)
-parser.add_argument('-w', '--weights_file',      type=str,                       required=True)
-parser.add_argument('-c', '--config_file',       type=str,                       required=True)
-parser.add_argument('-o', '--output_filepath',   type=str,                       required=True)
-parser.add_argument('-n', '--noise',             type=float, default=0.3)
-parser.add_argument('-b', '--style_blend',       type=float, default=0.5)
-parser.add_argument('-d', '--diffusion_steps',   type=int,   default=10)
-parser.add_argument('-e', '--embedding_scale',   type=float, default=1.0)
-parser.add_argument('-l', '--use_long_form',     action='store_true', default=False)
-parser.add_argument('-r', '--timbre_ref_blend',  type=float, default=0.3)
-parser.add_argument('-p', '--prosody_ref_blend', type=float, default=0.1)
+parser.add_argument('-t', '--text',                        type=str,                  required=True)
+parser.add_argument('-w', '--weights_file',                type=str,                  required=True)
+parser.add_argument('-c', '--config_file',                 type=str,                  required=True)
+parser.add_argument('-o', '--output_filepath',             type=str,                  required=True)
+parser.add_argument('-n', '--noise',                       type=float, default=0.3)
+parser.add_argument('-b', '--style_blend',                 type=float, default=0.5)
+parser.add_argument('-d', '--diffusion_steps',             type=int,   default=10)
+parser.add_argument('-e', '--embedding_scale',             type=float, default=1.0)
+parser.add_argument('-l', '--use_long_form',               action='store_true')
+parser.add_argument('-r', '--timbre_ref_blend',            type=float, default=0.3)
+parser.add_argument('-p', '--prosody_ref_blend',           type=float, default=0.1)
 group = parser.add_mutually_exclusive_group()
-group.add_argument('-i', '--reference_audio',   type=str,   default=None)
-group.add_argument('-s', '--reference_style',   type=str,   default=None)
+group.add_argument('-i', '--reference_audio',              type=str,   default=None)
+group.add_argument('-s', '--reference_style_json',         type=str,   default=None)
+parser.add_argument('-h', '--precomputed_style_character', type=str)  # used only with reference_style_json
+parser.add_argument('-a', '--precomputed_style_trait',     type=str)  # used only with reference_style_json
 args = parser.parse_args()
+
+if args.reference_style_json is None:
+    if args.precomputed_style_character or args.precomputed_style_trait:
+        parser.error('The options --precomputed_style_character and --precomputed_style_trait are not allowed if '
+                     '--reference_style_json is not specified.')
+else:  # So, args.reference_style_json is NOT None
+    if (not args.precomputed_style_character) or (not args.precomputed_style_trait):
+        parser.error('If you pass a value for --reference_style_json, then you must also specify values for '
+                     '--precomputed_style_character and --precomputed_style_trait')
 
 # Load pretrained ASR model
 config = yaml.safe_load(open(args.config_file))
@@ -230,7 +241,15 @@ if args.reference_audio:
     s_ref = compute_style(args.reference_audio)
 elif args.reference_style:
     with open(args.reference_style, 'r') as file:
-        s_ref = torch.FloatTensor([json.load(file)])
+        json_content = json.load(file)
+        nested_list = {item['Character']: {subitem['Trait']: subitem['Style Vector']
+                                           for subitem in item['Pre-computed Styles']}
+                       for item in json_content}
+        style_array = nested_list.get(args.precomputed_style_character).get(args.precomputed_style_trait)
+        if style_array is None:
+            raise Exception('No style array found for character ' + args.precomputed_style_character +
+                            ' and trait ' + args.precomputed_style_trait)
+        s_ref = torch.FloatTensor(style_array)
 else:
     s_ref = None
 
