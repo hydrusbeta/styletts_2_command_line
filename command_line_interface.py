@@ -61,7 +61,7 @@ parser.add_argument('-p', '--prosody_ref_blend',           type=float, default=0
 group = parser.add_mutually_exclusive_group()
 group.add_argument('-i', '--reference_audio',              type=str,   default=None)
 group.add_argument('-s', '--reference_style_json',         type=str,   default=None)
-parser.add_argument('-h', '--precomputed_style_character', type=str)  # used only with reference_style_json
+parser.add_argument('-m', '--precomputed_style_character', type=str)  # used only with reference_style_json
 parser.add_argument('-a', '--precomputed_style_trait',     type=str)  # used only with reference_style_json
 args = parser.parse_args()
 
@@ -239,8 +239,8 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
 # get reference style
 if args.reference_audio:
     s_ref = compute_style(args.reference_audio)
-elif args.reference_style:
-    with open(args.reference_style, 'r') as file:
+elif args.reference_style_json:
+    with open(args.reference_style_json, 'r') as file:
         json_content = json.load(file)
         nested_list = {item['Character']: {subitem['Trait']: subitem['Style Vector']
                                            for subitem in item['Pre-computed Styles']}
@@ -249,7 +249,7 @@ elif args.reference_style:
         if style_array is None:
             raise Exception('No style array found for character ' + args.precomputed_style_character +
                             ' and trait ' + args.precomputed_style_trait)
-        s_ref = torch.FloatTensor(style_array)
+        s_ref = torch.FloatTensor([style_array])
 else:
     s_ref = None
 
