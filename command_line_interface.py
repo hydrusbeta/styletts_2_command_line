@@ -61,18 +61,19 @@ parser.add_argument('-p', '--prosody_ref_blend',           type=float, default=0
 group = parser.add_mutually_exclusive_group()
 group.add_argument('-i', '--reference_audio',              type=str,   default=None)
 group.add_argument('-s', '--reference_style_json',         type=str,   default=None)
-parser.add_argument('-m', '--precomputed_style_character', type=str)  # used only with reference_style_json
+parser.add_argument('-m', '--precomputed_style_model',     type=str)  # used only with reference_style_json
+parser.add_argument('-g', '--precomputed_style_character', type=str)  # used only with reference_style_json
 parser.add_argument('-a', '--precomputed_style_trait',     type=str)  # used only with reference_style_json
 args = parser.parse_args()
 
 if args.reference_style_json is None:
-    if args.precomputed_style_character or args.precomputed_style_trait:
-        parser.error('The options --precomputed_style_character and --precomputed_style_trait are not allowed if '
-                     '--reference_style_json is not specified.')
+    if args.precomputed_style_model or args.precomputed_style_character or args.precomputed_style_trait:
+        parser.error('The options --precomputed_style_model --precomputed_style_character and --precomputed_style_trait'
+                     ' are not allowed if --reference_style_json is not specified.')
 else:  # So, args.reference_style_json is NOT None
-    if (not args.precomputed_style_character) or (not args.precomputed_style_trait):
+    if not (args.precomputed_style_model and args.precomputed_style_character and args.precomputed_style_trait):
         parser.error('If you pass a value for --reference_style_json, then you must also specify values for '
-                     '--precomputed_style_character and --precomputed_style_trait')
+                     '--precomputed_style_model --precomputed_style_character and --precomputed_style_trait')
 
 # Load pretrained ASR model
 config = yaml.safe_load(open(args.config_file))
@@ -145,6 +146,20 @@ def convert_word_to_ipa(word: Word):
     else:
         ipa_word = ''
     return ipa_word
+
+
+def get_precomputed_style_from_file(file_path, model_name, character, trait):
+    with open(file_path, 'r') as file:
+        json_contents = json.load(file)
+        nested_list = {item['Model']: {subitem['Character']: {subsubitem['Trait']: subsubitem['Style Vector']
+                                                              for subsubitem in subitem['Pre-computed Styles']}
+                                       for subitem in item['Characters']}
+                       for item in json_contents}
+        style_array = nested_list.get(model_name).get(character).get(trait)
+        if style_array is None:
+            raise Exception('No style array found for model ' + model_name + ', character ' + character + ' and trait '
+                            + trait)
+        return torch.FloatTensor([style_array])
 
 
 # Build model
@@ -240,16 +255,10 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
 if args.reference_audio:
     s_ref = compute_style(args.reference_audio)
 elif args.reference_style_json:
-    with open(args.reference_style_json, 'r') as file:
-        json_content = json.load(file)
-        nested_list = {item['Character']: {subitem['Trait']: subitem['Style Vector']
-                                           for subitem in item['Pre-computed Styles']}
-                       for item in json_content}
-        style_array = nested_list.get(args.precomputed_style_character).get(args.precomputed_style_trait)
-        if style_array is None:
-            raise Exception('No style array found for character ' + args.precomputed_style_character +
-                            ' and trait ' + args.precomputed_style_trait)
-        s_ref = torch.FloatTensor([style_array])
+    s_ref = get_precomputed_style_from_file(args.reference_style_json,
+                                            args.precomputed_style_model,
+                                            args.precomputed_style_character,
+                                            args.precomputed_style_trait)
 else:
     s_ref = None
 
