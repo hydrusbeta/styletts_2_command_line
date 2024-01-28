@@ -38,6 +38,8 @@ from gruut.const import Word
 from munch import Munch
 from nltk.tokenize import word_tokenize
 from text_utils import TextCleaner
+import re
+from arpabetandipaconvertor.arpabet2phoneticalphabet import ARPAbet2PhoneticAlphabetConvertor
 
 # Constants
 INTERNAL_SAMPLERATE = 24000
@@ -64,6 +66,7 @@ group.add_argument('-s', '--reference_style_json',         type=str,   default=N
 parser.add_argument('-m', '--precomputed_style_model',     type=str)  # used only with reference_style_json
 parser.add_argument('-g', '--precomputed_style_character', type=str)  # used only with reference_style_json
 parser.add_argument('-a', '--precomputed_style_trait',     type=str)  # used only with reference_style_json
+parser.add_argument('--speed',                             type=float, default=1.0)
 args = parser.parse_args()
 
 if args.reference_style_json is None:
@@ -131,11 +134,52 @@ def length_to_mask(lengths):
     return mask
 
 
+def locate_arpa_ipa_and_plaintext_spans(text: str):
+    # locate ARPAbet and IPA spans using regex:
+    arpabet_spans = [m.span(0) for m in re.finditer(r"{(.*?)}", text)]
+    ipa_spans = [m.span(0) for m in re.finditer(r"<(.*?)>", text)]
+    arpa_or_ipa_spans = sorted(arpabet_spans + ipa_spans)
+
+    # locate plaintext spans:
+    if arpa_or_ipa_spans:
+        # The plaintext is everything in between and outside the ARPAbet and IPA spans:
+        plaintext_spans = [(a[1], b[0]) for a, b in zip(arpa_or_ipa_spans[:-1], arpa_or_ipa_spans[1:])]
+        plaintext_spans = [(0, arpa_or_ipa_spans[0][0])] + plaintext_spans + [(arpa_or_ipa_spans[-1][-1], len(text))]
+    else:
+        # edge case - when there are no ARPAbet or IPA substitutions in text
+        plaintext_spans = [(0, len(text)-1)]
+    # More edge cases - when the very first or last word is an ARPAbet or IPA substitution:
+    if (0, 0) in plaintext_spans:
+        plaintext_spans.remove((0, 0))
+    if (len(text), len(text)) in plaintext_spans:
+        plaintext_spans.remove((len(text), len(text)))
+
+    all_spans = sorted(arpa_or_ipa_spans + plaintext_spans)
+
+    return all_spans, arpabet_spans, ipa_spans, plaintext_spans
+
+
 def convert_text_to_ipa(text: str):
-    sentences = gruut.sentences(text)
-    ipa_words = [convert_word_to_ipa(word) for sentence in sentences for word in sentence]
-    ipa_text = ' '.join(ipa_words)
-    return ipa_text
+    all_spans, arpabet_spans, ipa_spans, plaintext_spans = locate_arpa_ipa_and_plaintext_spans(text)
+    arpa_converter = ARPAbet2PhoneticAlphabetConvertor()
+
+    all_ipa_words = []
+    for span in all_spans:
+        span_text = (text[span[0]:span[1]]
+                     .replace("{", "")
+                     .replace("}", "")
+                     .replace("<", "")
+                     .replace(">", "")
+                     .strip())
+        if span in ipa_spans:
+            all_ipa_words = all_ipa_words + [span_text]
+        elif span in arpabet_spans:
+            all_ipa_words = all_ipa_words + [arpa_converter.convert_to_international_phonetic_alphabet(span_text)]
+        else:
+            sentences = gruut.sentences(span_text)
+            all_ipa_words = all_ipa_words + [convert_word_to_ipa(word) for sentence in sentences for word in sentence]
+
+    return ' '.join(all_ipa_words)
 
 
 def convert_word_to_ipa(word: Word):
@@ -194,12 +238,13 @@ sampler = DiffusionSampler(
 textcleaner = TextCleaner()
 
 
-def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, ref_s=None, alpha=0.25, beta=0.25, t=0.7):
+def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, ref_s=None, alpha=0.25, beta=0.25,
+          t=0.7, speed=1.0):
     text = text.strip()
     text = text.replace('"', '')
-    ps = [convert_text_to_ipa(text)]
-    ps = word_tokenize(ps[0])
-    ps = ' '.join(ps)
+    ps = convert_text_to_ipa(text)
+    print("IPA Transcription:", flush=True)
+    print(ps, flush=True)
     tokens = textcleaner(ps)
     tokens.insert(0, 0)
     tokens = torch.LongTensor(tokens).to(DEVICE).unsqueeze(0)
@@ -226,7 +271,7 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
         d = model.predictor.text_encoder(d_en, s, input_lengths, text_mask)
         x, _ = model.predictor.lstm(d)
         duration = model.predictor.duration_proj(x)
-        duration = torch.sigmoid(duration).sum(axis=-1)
+        duration = torch.sigmoid(duration).sum(axis=-1) / speed
         pred_dur = torch.round(duration.squeeze()).clamp(min=1)
         pred_aln_trg = torch.zeros(input_lengths, int(pred_dur.sum().data))
         c_frame = 0
@@ -281,7 +326,8 @@ if args.use_long_form:
                                      ref_s=s_ref,
                                      alpha=args.timbre_ref_blend,
                                      beta=args.prosody_ref_blend,
-                                     t=args.style_blend,)
+                                     t=args.style_blend,
+                                     speed=args.speed)
         audio_outputs.append(audio_output)
     audio_output = np.concatenate(audio_outputs).ravel()
 else:
@@ -292,7 +338,8 @@ else:
                                  embedding_scale=args.embedding_scale,
                                  ref_s=s_ref,
                                  alpha=args.timbre_ref_blend,
-                                 beta=args.prosody_ref_blend)
+                                 beta=args.prosody_ref_blend,
+                                 speed=args.speed)
 
 # Write the output file
 soundfile.write(args.output_filepath, audio_output, INTERNAL_SAMPLERATE, format='FLAC')
