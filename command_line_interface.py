@@ -147,7 +147,7 @@ def locate_arpa_ipa_and_plaintext_spans(text: str):
         plaintext_spans = [(0, arpa_or_ipa_spans[0][0])] + plaintext_spans + [(arpa_or_ipa_spans[-1][-1], len(text))]
     else:
         # edge case - when there are no ARPAbet or IPA substitutions in text
-        plaintext_spans = [(0, len(text)-1)]
+        plaintext_spans = [(0, len(text))]
     # More edge cases - when the very first or last word is an ARPAbet or IPA substitution:
     if (0, 0) in plaintext_spans:
         plaintext_spans.remove((0, 0))
@@ -222,7 +222,7 @@ for key in model:
             state_dict = params[key]
             new_state_dict = OrderedDict()
             for k, v in state_dict.items():
-                name = k[7:] # remove `module.`
+                name = k[7:]  # remove `module.`
                 new_state_dict[name] = v
             model[key].load_state_dict(new_state_dict, strict=False)
 
