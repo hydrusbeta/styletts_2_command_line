@@ -39,10 +39,10 @@ from munch import Munch
 from nltk.tokenize import word_tokenize
 from text_utils import TextCleaner
 import re
+import os
 from arpabetandipaconvertor.arpabet2phoneticalphabet import ARPAbet2PhoneticAlphabetConvertor
 
 # Constants
-INTERNAL_SAMPLERATE = 24000
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Parse inputs
@@ -93,8 +93,24 @@ BERT_path = config.get('PLBERT_dir', False)
 plbert = load_plbert(BERT_path)
 
 # define helper methods
+def determine_sample_rate(config, path):
+    special_cases = [
+        'Twilight Sparkle (proof-of-concept)',
+        'Multi-speaker (Mane 6, CMC, Princesses, Discord, Gilda, Zecora, Trixie, Starlight, Chrysalis, Tirek, Cozy Glow, Flim, Flam, and Shining Armor)',
+        'Multi-speaker (30 epochs) (Mane 6, CMC, Princesses, Discord, Gilda, Zecora, Trixie, Starlight, Chrysalis, Tirek, Cozy Glow, Flim, Flam, and Shining Armor)',
+        'Multi-speaker (40 epochs) (Mane 6, CMC, Princesses, Discord, Gilda, Zecora, Trixie, Starlight, Chrysalis, Tirek, Cozy Glow, Flim, Flam, and Shining Armor)',
+    ]
+    config_folder_name = os.path.basename(os.path.dirname(path))
+    if config_folder_name in special_cases:
+        return 24000
+    else:
+        return config.get('preprocess_params', dict()).get('sr', 24000)
+
+
+trained_sample_rate = determine_sample_rate(config, args.config_file)
+
 to_mel = torchaudio.transforms.MelSpectrogram(
-    n_mels=80, n_fft=2048, win_length=1200, hop_length=300)
+    n_mels=80, n_fft=2048, win_length=1200, hop_length=300, sample_rate=trained_sample_rate)
 mean, std = -4, 4
 
 
@@ -114,11 +130,11 @@ def preprocess(wave):
     return mel_tensor
 
 
-def compute_style(path):
+def compute_style(path, trained_sample_rate):
     wave, sr = librosa.load(path)
     audio, index = librosa.effects.trim(wave, top_db=30)
-    if sr != INTERNAL_SAMPLERATE:
-        audio = librosa.resample(audio, orig_sr=sr, target_sr=INTERNAL_SAMPLERATE)
+    if sr != trained_sample_rate:
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=trained_sample_rate)
     mel_tensor = preprocess(audio).to(DEVICE)
 
     with torch.no_grad():
@@ -208,7 +224,7 @@ def get_precomputed_style_from_file(file_path, model_name, character, trait):
 
 # Build model
 model_params = recursive_munch(config['model_params'])
-model = models.build_model(model_params, text_aligner, pitch_extractor, plbert)
+model = models.build_model(model_params, text_aligner, pitch_extractor, plbert, trained_sample_rate)
 _ = [model[key].eval() for key in model]
 _ = [model[key].to(DEVICE) for key in model]
 params_whole = torch.load(args.weights_file, map_location=DEVICE)
@@ -262,11 +278,11 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
         if s_previous is not None:
             # convex combination of previous and current style
             s_pred = t * s_previous + (1 - t) * s_pred
-        s = s_pred[:, 128:]
-        ref = s_pred[:, :128]
+        s_pred_prosody = s_pred[:, 128:]
+        s_pred_timbre = s_pred[:, :128]
         if ref_s is not None:
-            ref = alpha * ref + (1 - alpha) * ref_s[:, :128]
-            s = beta * s + (1 - beta) * ref_s[:, 128:]
+            ref = alpha * s_pred_timbre + (1 - alpha) * ref_s[:, :128]
+            s = beta * s_pred_prosody + (1 - beta) * ref_s[:, 128:]
             s_pred = torch.cat([ref, s], dim=-1)
         d = model.predictor.text_encoder(d_en, s, input_lengths, text_mask)
         x, _ = model.predictor.lstm(d)
@@ -298,7 +314,7 @@ def infer(text, s_previous, scaled_noise, diffusion_steps=5, embedding_scale=1, 
 
 # get reference style
 if args.reference_audio:
-    s_ref = compute_style(args.reference_audio)
+    s_ref = compute_style(args.reference_audio, trained_sample_rate)
 elif args.reference_style_json:
     s_ref = get_precomputed_style_from_file(args.reference_style_json,
                                             args.precomputed_style_model,
@@ -342,5 +358,21 @@ else:
                                  speed=args.speed)
 
 # Write the output file
-soundfile.write(args.output_filepath, audio_output, INTERNAL_SAMPLERATE, format='FLAC')
+soundfile.write(args.output_filepath, audio_output, trained_sample_rate, format='FLAC')
 
+# istft.py
+#
+# line 303
+#     def __init__(self, style_dim, resblock_kernel_sizes, upsample_rates, upsample_initial_channel, resblock_dilation_sizes, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size):
+#     def __init__(self, style_dim, resblock_kernel_sizes, upsample_rates, upsample_initial_channel, resblock_dilation_sizes, upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, sample_rate):
+#
+# line 311
+#                     sampling_rate=24000,
+#                     sampling_rate=sample_rate,
+#
+# line 474
+#                 gen_istft_n_fft=20, gen_istft_hop_size=5):
+#                 gen_istft_n_fft=20, gen_istft_hop_size=5, sample_rate=24000):
+# line 497
+#                                    upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size)
+#                                    upsample_kernel_sizes, gen_istft_n_fft, gen_istft_hop_size, sample_rate)
